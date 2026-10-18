@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Semaphore;
 import java.util.function.BooleanSupplier;
+import java.util.stream.Collectors;
 
 /* Этап 1: планировщик, который ведёт настоящие потоки строго по одному (передача хода через семафоры).
  * Этап 2: обнаружение deadlock в главном цикле и корректное завершение застрявших потоков.
@@ -29,6 +30,11 @@ public final class Scheduler {
     private final List<Boolean> awaited = new ArrayList<>(); // ждут в await
     private final List<Boolean> dirty = new ArrayList<>(); // трогал общее состояние с прошлой паузы
     private final List<Boolean> forcedPause = new ArrayList<>(); // point()/await требуют паузу перед следующей операцией
+
+    private final List<SchedLock> locks = new ArrayList<>(); // все локи списком
+    private final List<SchedLock> wants = new ArrayList<>(); // список на то, какой лок ждет каждый поток (null значит не ждет)
+    private boolean aborted = false; // запуск прерван
+
     private int last = -1;
 
     public Scheduler() { }
@@ -41,6 +47,8 @@ public final class Scheduler {
             TID.set(id);
             try {
                 body.run();
+            } catch (RunAbortedException _) {
+                // Завершение из-за дедлока
             } finally {
                 finished.set(id, true);
                 schedulerSemaphore.release();
@@ -51,6 +59,7 @@ public final class Scheduler {
         awaited.add(false);
         dirty.add(false);
         forcedPause.add(true);
+        wants.add(null);
     }
 
     /** Запустить потоки и вести их по одному: на каждой паузе спросить strategy.pick(enabled, last). */
@@ -70,19 +79,44 @@ public final class Scheduler {
             // enabled
             List<Integer> enabled = new ArrayList<>();
             for (int i = 0; i < threads.size(); i++) {
-                if (!finished.get(i) && !awaited.get(i)) enabled.add(i);
+                if (finished.get(i) || awaited.get(i)) continue;
+
+                SchedLock w = wants.get(i);
+                if (w != null && w.ownerThreadId != -1) continue;
+
+                enabled.add(i);
             }
             if (enabled.isEmpty()) {
+                if (!finished.stream().allMatch(Boolean::booleanValue)) {
+                    deadlock = deadlockMessage();
+                    abortThreads();
+                }
                 break;
             }
 
             // strategy.pick
-            int chosen = strategy.pick(enabled, last);
-            last = chosen;
-            trace.append(letter(chosen));
-            threadSemaphores.get(chosen).release(); // разбудить
+            try {
+                int chosen = strategy.pick(enabled, last);
+                last = chosen;
+                trace.append(letter(chosen));
+                threadSemaphores.get(chosen).release(); // разбудить
+            } catch (IllegalStateException illegalStateException) {
+                threads.forEach(Thread::interrupt);
+                throw illegalStateException;
+            }
+
             try {
                 schedulerSemaphore.acquire(); // ждать
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        }
+
+        // подождать все потоки
+        for (Thread thread : threads) {
+            try {
+                thread.join();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException(e);
@@ -159,5 +193,51 @@ public final class Scheduler {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
         }
+        if (aborted) throw new RunAbortedException();
+    }
+
+    void registerLock(SchedLock l) {
+        locks.add(l);
+    }
+
+    void setWantLock(SchedLock l) {
+        wants.set(TID.get(), l);
+    }
+
+    boolean tryAcquireLock(SchedLock l) {
+        if (l.ownerThreadId == -1) {
+            l.ownerThreadId = TID.get();
+            return true;
+        }
+        return false;
+    }
+
+    static void blockOnLock() {
+        SCHEDULER.get().yieldTurn();
+    }
+
+    void releaseLock(SchedLock l) {
+        l.ownerThreadId = -1;
+    }
+
+    private String deadlockMessage() {
+        return "held=" + locks.stream()
+                .filter(l -> l.ownerThreadId >= 0)
+                .map(l -> l.name + ':' + letter(l.ownerThreadId))
+                .collect(Collectors.joining(", ", "{", "}"));
+    }
+
+    /** Принудительно завершить все потоки при дедлоке */
+    private void abortThreads() {
+        aborted = true;
+        for (int i = 0; i < threads.size(); i++) {
+            if (!finished.get(i)) {
+                threadSemaphores.get(i).release();
+            }
+        }
+    }
+
+    static final class RunAbortedException extends RuntimeException {
+        RunAbortedException() { super("run aborted"); }
     }
 }
