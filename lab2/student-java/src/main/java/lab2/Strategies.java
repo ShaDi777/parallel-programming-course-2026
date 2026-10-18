@@ -1,5 +1,6 @@
 package lab2;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
@@ -59,18 +60,70 @@ public final class Strategies {
     /** Stateless DFS по дереву выборов: каждый прогон с нуля, повторяет префикс прошлого и берёт следующий вариант.
      *  bound — максимум вытеснений (этап 5); для dfs runner передаёт Integer.MAX_VALUE. */
     public static final class Dfs implements Strategy {
-        public Dfs(int bound) { }
+        // максимум вытеснений
+        private final int bound;
+
+        // списки enabled на каждый уровень
+        private final List<List<Integer>> choicesByDepth = new ArrayList<>();
+
+        // какое значение=(индекс из enabled) проверялся на уровне последним; индекс в этом списке == уровень
+        private final List<Integer> lastChoiceIndexByDepth = new ArrayList<>();
+
+        // текущий путь, аналог trace из Scheduler
+        private final List<Integer> path = new ArrayList<>();
+
+        // счётчик вытеснений
+        private int preemptionCount = 0;
+
+        public Dfs(int bound) {
+            this.bound = bound;
+        }
 
         /** Подготовиться к новому прогону (позиция в пути, счётчик вытеснений). */
-        public void beginRun() { }
+        public void beginRun() {
+            path.clear();
+            preemptionCount = 0;
+        }
 
         public int pick(List<Integer> enabled, int last) {
-            throw new UnsupportedOperationException("TODO этап 4: Dfs.pick");
+            int depth = path.size();
+            int choice;
+            if (depth < choicesByDepth.size()) {
+                choice = choicesByDepth.get(depth).get(lastChoiceIndexByDepth.get(depth));
+            } else {
+                List<Integer> possible = new ArrayList<>();
+                for (int t : enabled) {
+                    if (preemptionCount + (t == last ? 0 : 1) <= bound) {
+                        possible.add(t);
+                    }
+                }
+                choicesByDepth.add(possible);
+                choice = possible.getFirst();
+                lastChoiceIndexByDepth.add(0);
+            }
+            if (choice != last) {
+                preemptionCount++;
+            }
+            path.add(choice);
+            return choice;
         }
 
         /** Выбрать следующий путь; false — дерево обойдено. */
         public boolean endRun() {
-            throw new UnsupportedOperationException("TODO этап 4: Dfs.endRun");
+            int depth = path.size() - 1;
+            while (depth >= 0) {
+                int newChoiceIndex = lastChoiceIndexByDepth.get(depth) + 1;
+                if (newChoiceIndex < choicesByDepth.get(depth).size()) {
+                    lastChoiceIndexByDepth.set(depth, newChoiceIndex);
+                    while (choicesByDepth.size() > depth + 1) {
+                        choicesByDepth.removeLast();
+                        lastChoiceIndexByDepth.removeLast();
+                    }
+                    return true;
+                }
+                depth--;
+            }
+            return false;
         }
     }
 }
