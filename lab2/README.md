@@ -729,13 +729,50 @@ schedule AB -> DEADLOCK held={a:A, b:B}
   - Потому, что в ней меньше точек пауз. Там всего один лок, и, когда один поток захватывает его, второй просто ждет и не участвует в планировании, пока лок не станет доступен (то есть пока первый поток полностью не завершится)
 
 #### Этап 5: Bounded
-| Программа | K | Расписаний | Ошибок | Первая ошибочная трасса | На каком решении вытеснение (для минимального K; нумерация с 1, как в этапе 5) |
-|---|---|---|---|---|---|
-| `withdraw-v1` | 0 | | | | |
-| `withdraw-v1` | 1 | | | | |
-| `withdraw-v1` | 2 | | | | |
-| `transfer` | 0 | | | | |
-| `transfer` | 1 | | | | |
+| Программа     | K | Расписаний | Ошибок | Первая ошибочная трасса | На каком решении вытеснение (для минимального K; нумерация с 1, как в этапе 5) |
+|---------------|---|------------|--------|-------------------------|--------------------------------------------------------------------------------|
+| `withdraw-v1` | 0 | 2          | 0      | -                       |                                                                                |
+| `withdraw-v1` | 1 | 4          | 2      | AABBBBAA                | После проверки условия balance >= amt                                          |
+| `withdraw-v1` | 2 | 6          | 4      | AABBAABB                | После проверки условия balance >= amt для каждого из потоков                   |
+| `transfer`    | 0 | 2          | 0      | -                       |                                                                                |
+| `transfer`    | 1 | 6          | 2      | AB                      | После захвата первого лока                                                     |
+
+- withdraw-v1 replay AABBBBAA log
+```
+  A  lock mu
+  A  unlock mu
+  A  window
+  B  lock mu    // ВЫТЕСНЕНИЕ
+  B  unlock mu
+  B  window
+  B  lock mu
+  B  unlock mu
+  A  lock mu
+  A  unlock mu
+schedule AABBBBAA -> OVERDRAFT balance=-100 results=true,true
+```
+- withdraw-v1 replay AABBAABB log
+```
+  A  lock mu
+  A  unlock mu
+  A  window
+  B  lock mu    // ВЫТЕСНЕНИЕ
+  B  unlock mu
+  B  window
+  A  lock mu    // ВЫТЕСНЕНИЕ
+  A  unlock mu
+  B  lock mu
+  B  unlock mu
+schedule AABBAABB -> OVERDRAFT balance=-100 results=true,true
+```
+- transfer replay AB log
+```
+  A  lock a
+  A  window
+  B  lock b  // ВЫТЕСНЕНИЕ
+  B  window
+schedule AB -> DEADLOCK held={a:A, b:B}
+```
 
 ### 3. Результаты этапа 6 (Коллектор)
 

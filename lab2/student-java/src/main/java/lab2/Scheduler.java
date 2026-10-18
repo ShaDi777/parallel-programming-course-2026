@@ -100,9 +100,9 @@ public final class Scheduler {
                 last = chosen;
                 trace.append(letter(chosen));
                 threadSemaphores.get(chosen).release(); // разбудить
-            } catch (IllegalStateException illegalStateException) {
+            } catch (Exception e) {
                 threads.forEach(Thread::interrupt);
-                throw illegalStateException;
+                throw e;
             }
 
             try {

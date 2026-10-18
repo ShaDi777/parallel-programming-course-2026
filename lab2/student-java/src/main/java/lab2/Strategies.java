@@ -88,12 +88,14 @@ public final class Strategies {
         public int pick(List<Integer> enabled, int last) {
             int depth = path.size();
             int choice;
+            boolean lastStillAlive = enabled.contains(last);
             if (depth < choicesByDepth.size()) {
                 choice = choicesByDepth.get(depth).get(lastChoiceIndexByDepth.get(depth));
             } else {
                 List<Integer> possible = new ArrayList<>();
                 for (int t : enabled) {
-                    if (preemptionCount + (t == last ? 0 : 1) <= bound) {
+                    int isPreemption = (lastStillAlive && t != last) ? 1 : 0;
+                    if (preemptionCount + isPreemption <= bound) {
                         possible.add(t);
                     }
                 }
@@ -101,7 +103,7 @@ public final class Strategies {
                 choice = possible.getFirst();
                 lastChoiceIndexByDepth.add(0);
             }
-            if (choice != last) {
+            if (lastStillAlive && choice != last) {
                 preemptionCount++;
             }
             path.add(choice);
