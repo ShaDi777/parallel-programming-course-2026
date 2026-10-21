@@ -27,12 +27,12 @@ public final class Scheduler {
     private final Semaphore schedulerSemaphore = new Semaphore(0); // семафор для хода планировщика
 
     private final List<Boolean> finished = new ArrayList<>(); // полностью завершенные потоки
-    private final List<Boolean> awaited = new ArrayList<>(); // ждут в await
     private final List<Boolean> dirty = new ArrayList<>(); // трогал общее состояние с прошлой паузы
     private final List<Boolean> forcedPause = new ArrayList<>(); // point()/await требуют паузу перед следующей операцией
 
     private final List<SchedLock> locks = new ArrayList<>(); // все локи списком
     private final List<SchedLock> wants = new ArrayList<>(); // список на то, какой лок ждет каждый поток (null значит не ждет)
+    private final List<BooleanSupplier> awaitedCond = new ArrayList<>(); // условие, которое ждет поток в await (null значит не ждет)
     private boolean aborted = false; // запуск прерван
 
     private int last = -1;
@@ -47,7 +47,7 @@ public final class Scheduler {
             TID.set(id);
             try {
                 body.run();
-            } catch (RunAbortedException _) {
+            } catch (RunAbortedException ignored) {
                 // Завершение из-за дедлока
             } finally {
                 finished.set(id, true);
@@ -56,10 +56,10 @@ public final class Scheduler {
         }));
         threadSemaphores.add(new Semaphore(0));
         finished.add(false);
-        awaited.add(false);
         dirty.add(false);
         forcedPause.add(true);
         wants.add(null);
+        awaitedCond.add(null);
     }
 
     /** Запустить потоки и вести их по одному: на каждой паузе спросить strategy.pick(enabled, last). */
@@ -76,10 +76,13 @@ public final class Scheduler {
         }
         // Главный цикл: enabled -> strategy.pick -> разбудить -> ждать
         while (true) {
-            // enabled
+            // enabled ABBAA BBAAB
             List<Integer> enabled = new ArrayList<>();
             for (int i = 0; i < threads.size(); i++) {
-                if (finished.get(i) || awaited.get(i)) continue;
+                // перепроверка ждущих условий
+                boolean shouldAwait = awaitedCond.get(i) != null && !awaitedCond.get(i).getAsBoolean();
+
+                if (finished.get(i) || shouldAwait) continue;
 
                 SchedLock w = wants.get(i);
                 if (w != null && w.ownerThreadId != -1) continue;
@@ -140,13 +143,12 @@ public final class Scheduler {
     public static void await(BooleanSupplier cond) {
         Scheduler s = SCHEDULER.get();
         int id = TID.get();
+        s.awaitedCond.set(id, cond);
         pauseBeforeShared();
-        // TODO recheck cycle later
-        while (!cond.getAsBoolean()) {
-            s.awaited.set(id, true);
+        if (!cond.getAsBoolean()) {
             s.yieldTurn();
-            s.awaited.set(id, false);
         }
+        s.awaitedCond.set(id, null);
         doLog(id, "await done");
         s.forcedPause.set(id, true);
         s.dirty.set(id, true);
