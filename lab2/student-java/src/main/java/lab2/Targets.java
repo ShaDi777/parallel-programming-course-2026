@@ -140,7 +140,8 @@ public final class Targets {
 
         void setInside(int w, int v) {
             if (plainInside) { insidePlain[w] = v; return; }
-            if (acqrel) inside.get(w).setRelease(v); else inside.get(w).set(v);
+            if (acqrel) inside.get(w).setRelease(v);
+            else inside.get(w).set(v);
         }
 
         void record(int w) {
